@@ -1,0 +1,10 @@
+**/build**
+**.user
+**.DS_Store
+**/.cache
+**/.vscode
+**.autosave
+**/depot_tools
+**/install
+**/skia-canvaskit**
+**.tar.gz
