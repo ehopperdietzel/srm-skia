@@ -1,14 +1,19 @@
 # srm-skia
 
-[SRM](https://github.com/CuarzoSoftware/SRM) example using Skia as renderer.
+[SRM](https://github.com/CuarzoSoftware/SRM) example using Skia.
 
 ![](demo.jpg)
+
+### Dependencies
+
+- [SRM](https://github.com/CuarzoSoftware/SRM)
+- [Skia](https://github.com/CuarzoSoftware/Skia)
 
 ### Build
 
 ```bash
+$ git clone https://github.com/ehopperdietzel/srm-skia.git
 $ cd srm-skia
-$ ./get_and_build_skia_here.sh
 $ meson setup build
 $ cd build
 $ meson compile

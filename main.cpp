@@ -12,21 +12,27 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "include/gpu/gl/GrGLInterface.h"
-#include "include/gpu/gl/GrGLTypes.h"
-#include "include/gpu/GrDirectContext.h"
-#include "include/gpu/GrBackendSurface.h"
-#include "include/core/SkImage.h"
-#include "include/core/SkSurface.h"
-#include "include/core/SkCanvas.h"
-#include "include/core/SkColorSpace.h"
-#include "include/gpu/gl/GrGLAssembleInterface.h"
+#include <include/gpu/gl/GrGLInterface.h>
+#include <include/gpu/gl/GrGLTypes.h>
+#include <include/gpu/GrDirectContext.h>
+#include <include/gpu/GrBackendSurface.h>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkSurface.h>
+#include <include/core/SkCanvas.h>
+#include <include/gpu/gl/GrGLAssembleInterface.h>
+#include <include/core/SkColorSpace.h>
 
 #define BALL_SPEED 10.0
 #define BALLS_N 20
 
+static UInt32 initializedConnectors = 0;
+static sk_sp<SkColorSpace> colorSpace = SkColorSpace::MakeSRGBLinear();
+static SkSurfaceProps skSurfaceProps(0, kUnknown_SkPixelGeometry);
+
 struct Skia
 {
+    GrContextOptions contextOptions;
     sk_sp<GrDirectContext> context;
     sk_sp<SkSurface> gpuSurface;
     SkCanvas *gpuCanvas;
@@ -69,6 +75,7 @@ static void initializeGL(SRMConnector *connector, void *userData)
 {
     ConnectorData *data = (ConnectorData*)userData;
     SRMConnectorMode *mode = srmConnectorGetCurrentMode(connector);
+    initializedConnectors++;
 
     for (int i = 0; i < BALLS_N; i++)
     {
@@ -82,15 +89,14 @@ static void initializeGL(SRMConnector *connector, void *userData)
         return (void *)eglGetProcAddress(p);
     });
 
-    GrContextOptions options;
-    options.fShaderCacheStrategy = GrContextOptions::ShaderCacheStrategy::kSkSL;
-    options.fAvoidStencilBuffers = true;
-    options.fPreferExternalImagesOverES3 = true;
-    options.fDisableGpuYUVConversion = true;
-    options.fReduceOpsTaskSplitting = GrContextOptions::Enable::kNo;
-    options.fReducedShaderVariations = false;
+    data->skia.contextOptions.fShaderCacheStrategy = GrContextOptions::ShaderCacheStrategy::kSkSL;
+    data->skia.contextOptions.fAvoidStencilBuffers = true;
+    data->skia.contextOptions.fPreferExternalImagesOverES3 = true;
+    data->skia.contextOptions.fDisableGpuYUVConversion = true;
+    data->skia.contextOptions.fReduceOpsTaskSplitting = GrContextOptions::Enable::kNo;
+    data->skia.contextOptions.fReducedShaderVariations = false;
 
-    data->skia.context = GrDirectContext::MakeGL(interface, options);
+    data->skia.context = GrDirectContext::MakeGL(interface, data->skia.contextOptions);
 
     if (!data->skia.context.get())
     {
@@ -98,23 +104,33 @@ static void initializeGL(SRMConnector *connector, void *userData)
         exit(1);
     }
 
-    GrGLFramebufferInfo fbInfo;
-    fbInfo.fFBOID = 0;
-    fbInfo.fFormat = GL_RGB8_OES;
+    srmConnectorRepaint(connector);
+}
 
-    GrBackendRenderTarget target(
+static void paintGL(SRMConnector *connector, void *userData)
+{
+    ConnectorData *data = (ConnectorData*)userData;
+    SRMConnectorMode *mode = srmConnectorGetCurrentMode(connector);
+    SkPaint paint;
+    SkMatrix m;
+
+    /* Create a wrapper SkSurface for the current FB */
+
+    const GrGLFramebufferInfo fbInfo{
+        .fFBOID = srmConnectorGetFramebufferID(connector),
+        .fFormat = GL_RGB8_OES
+    };
+
+    const GrBackendRenderTarget target(
         srmConnectorModeGetWidth(mode),
         srmConnectorModeGetHeight(mode),
         0, 0,
         fbInfo);
 
-    sk_sp<SkColorSpace> colorSpace = SkColorSpace::MakeSRGBLinear();
-    SkSurfaceProps skSurfaceProps(0, kUnknown_SkPixelGeometry);
-
-    data->skia.gpuSurface = SkSurface::MakeFromBackendRenderTarget(
+    data->skia.gpuSurface = SkSurfaces::WrapBackendRenderTarget(
         data->skia.context.get(),
         target,
-        GrSurfaceOrigin::kBottomLeft_GrSurfaceOrigin,
+        GrSurfaceOrigin::kTopLeft_GrSurfaceOrigin,
         SkColorType::kRGB_888x_SkColorType,
         colorSpace,
         &skSurfaceProps);
@@ -126,18 +142,8 @@ static void initializeGL(SRMConnector *connector, void *userData)
     }
 
     data->skia.gpuCanvas = data->skia.gpuSurface->getCanvas();
-    srmConnectorRepaint(connector);
-}
-
-static void paintGL(SRMConnector *connector, void *userData)
-{
-    ConnectorData *data = (ConnectorData*)userData;
-    SRMConnectorMode *mode = srmConnectorGetCurrentMode(connector);
-
     double scale = 1.f + (1.0 + cos(data->skia.t));
     data->skia.gpuCanvas->clear(SK_ColorBLUE);
-    SkPaint paint;
-    SkMatrix m;
     m.setScale(scale, scale);
     data->skia.gpuCanvas->setMatrix(m);
     paint.setColor(SK_ColorWHITE);
@@ -168,13 +174,12 @@ static void paintGL(SRMConnector *connector, void *userData)
 
 static void resizeGL(SRMConnector */*connector*/, void */*userData*/) {}
 static void pageFlipped(SRMConnector */*connector*/, void */*userData*/) {}
+
 static void uninitializeGL(SRMConnector */*connector*/, void *userData)
 {
     ConnectorData *data = (ConnectorData*)userData;
-
-    /* TODO: Free Skia stuff */
-
     delete data;
+    initializedConnectors--;
 }
 
 static SRMConnectorInterface connectorInterface =
@@ -212,6 +217,8 @@ static void connectorUnpluggedEventHandler(SRMListener *listener, SRMConnector *
 
 int main(void)
 {
+    setenv("SRM_DEBUG", "3", 0);
+
     SRMCore *core = srmCoreCreate(&srmInterface, NULL);
 
     if (!core)
@@ -236,10 +243,13 @@ int main(void)
         }
     }
 
-    while (1)
-        if (srmCoreProcessMonitor(core, -1) < 0)
-            break;
+    if (initializedConnectors == 0)
+    {
+        SRMFatal("[srm-skia] Failed to initialize connectors, you are probably launching it inside a window manager, switch to a free TTY or plug a display and try again.");
+        return 1;
+    }
 
+    while (srmCoreProcessMonitor(core, -1) >= 0 && initializedConnectors > 0) {}
     srmCoreDestroy(core);
     return 0;
 }
